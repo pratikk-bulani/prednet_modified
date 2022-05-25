@@ -12,7 +12,7 @@ class PredNet(nn.Module):
         self.n_layers = len(R_channels)
         self.output_mode = output_mode
 
-        default_output_modes = ['prediction', 'error']
+        default_output_modes = ['prediction', 'error', 'error_pixel_wise']
         assert output_mode in default_output_modes, 'Invalid output_mode: ' + str(output_mode)
 
         for i in range(self.n_layers):
@@ -57,6 +57,9 @@ class PredNet(nn.Module):
             h = h//2
         time_steps = input.size(1)
         total_error = []
+
+        if self.output_mode == "error_pixel_wise":
+            result = []
         
         for t in range(time_steps):
             A = input[:,t]
@@ -80,7 +83,6 @@ class PredNet(nn.Module):
                 R_seq[l] = R
                 H_seq[l] = hx
 
-
             for l in range(self.n_layers):
                 conv = getattr(self, 'conv{}'.format(l))
                 A_hat = conv(R_seq[l])
@@ -89,19 +91,37 @@ class PredNet(nn.Module):
                 pos = F.relu(A_hat - A)
                 neg = F.relu(A - A_hat)
                 E = torch.cat([pos, neg],1)
+                # print("pos.shape, neg.shape, E.shape:", pos.shape, neg.shape, E.shape)
                 E_seq[l] = E
                 if l < self.n_layers - 1:
                     update_A = getattr(self, 'update_A{}'.format(l))
                     A = update_A(E)
+                
+                # if self.output_mode == "error_pixel_wise":
+                #     if l == 0:
+                #         result.append(torch.sum(E_seq[l], dim = 1))
+                #     else:
+                #         img_shape = result[-1].shape[-2:]
+                #         result[-1] = result[-1] + torch.nn.functional.interpolate(torch.sum(E_seq[l], dim=1, keepdim=True), size=img_shape, mode = 'bilinear')[:, 0, :, :]
+                # torch.cuda.empty_cache()
+            # print("E_seq[0].shape", E_seq[0].shape)
             if self.output_mode == 'error':
+                # print("e.shape:", [e.shape for e in E_seq])
+
                 mean_error = torch.cat([torch.mean(e.view(e.size(0), -1), 1, keepdim=True) for e in E_seq], 1)
                 # batch x n_layers
                 total_error.append(mean_error)
+            elif self.output_mode == "error_pixel_wise":
+                result.append(torch.sum(E_seq[0], dim = 1)) # batch x height x width is appended
+            # elif self.output_mode == "error_pixel_wise":
+            #     result.append(torch.nn.functional.interpolate(torch.sum(E_seq[3], dim = 1, keepdim = True), size=(128, 160), mode = 'bilinear')[:, 0, :, :]) # batch x height x width is appended
 
         if self.output_mode == 'error':
             return torch.stack(total_error, 2) # batch x n_layers x nt
         elif self.output_mode == 'prediction':
             return frame_prediction
+        elif self.output_mode == "error_pixel_wise":
+            return result
 
 
 
